@@ -13,6 +13,12 @@ const APP_STATUS_LABELS = {
   REJECTED:            'Not Selected',
 };
 
+const getAppliedBadgeClass = job => {
+  if (job.myApplicationStatus === 'SELECTED') return 'badge-selected';
+  if (job.myApplicationStatus === 'REJECTED') return 'badge-rejected';
+  return 'badge-applied';
+};
+
 const DEPT_ABBR = {
   'Computer Science & Engineering': 'CSE',
   'Electronics & Communication': 'ECE',
@@ -209,7 +215,7 @@ export default function StudentJobs() {
 
         {filtered.map(job => {
           const isExpanded = expanded === job.id;
-          const appliedLabel = APP_STATUS_LABELS[job.myApplicationStatus] || 'Applied';
+          const appliedLabel = job.myCurrentRoundDisplayStatus || APP_STATUS_LABELS[job.myApplicationStatus] || 'Applied';
           const deadlineDate = job.applicationDeadline ? new Date(job.applicationDeadline) : null;
           const isDeadlinePassed = deadlineDate && deadlineDate < new Date();
           const meetsReqs = meetsRequirements(job);
@@ -229,7 +235,7 @@ export default function StudentJobs() {
                       Application Closed
                     </span>
                   ) : job.alreadyApplied ? (
-                    <span className={`badge ${job.myApplicationStatus === 'SELECTED' ? 'badge-selected' : 'badge-applied'}`}>
+                    <span className={`badge ${getAppliedBadgeClass(job)}`}>
                       {appliedLabel}
                     </span>
                   ) : meetsReqs ? (

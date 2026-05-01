@@ -44,6 +44,10 @@ const getDeptFullName = deptAbbr => {
 };
 
 const getStatusConfig = applicant => {
+  if (['SELECTED', 'REJECTED'].includes(applicant?.status)) {
+    return STATUS_CFG[applicant.status] || { label: applicant.status, cls: 'badge-pending' };
+  }
+
   if (applicant?.currentRoundDisplayStatus) {
     return {
       label: applicant.currentRoundDisplayStatus,
@@ -94,6 +98,9 @@ export default function AdminJobApplicants() {
   }, [id]);
 
   const getApplicantFilterLabel = applicant => {
+    if (['SELECTED', 'REJECTED'].includes(applicant?.status)) {
+      return STATUS_CFG[applicant.status]?.label || applicant.status;
+    }
     if (applicant?.currentRoundDisplayStatus) return applicant.currentRoundDisplayStatus;
     return STATUS_CFG[applicant?.status]?.label || applicant?.status || 'Unknown';
   };

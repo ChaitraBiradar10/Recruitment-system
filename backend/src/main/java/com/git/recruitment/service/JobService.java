@@ -78,13 +78,10 @@ public class JobService {
         User user = userRepository.findByEmail(email).orElse(null);
         return jobRepository.findByStatusOrderByCreatedAtDesc(Job.JobStatus.ACTIVE).stream()
                 .map(j -> {
-                    boolean applied = user != null && appRepository.existsByUserAndJob(user, j);
-                    String myStatus = null;
-                    if (applied && user != null) {
-                        myStatus = appRepository.findByUserAndJob(user, j)
-                                .map(a -> a.getStatus().name()).orElse(null);
-                    }
-                    return toJobResponse(j, applied ? myStatus : null);
+                    JobApplication myApplication = user != null
+                            ? appRepository.findByUserAndJob(user, j).orElse(null)
+                            : null;
+                    return toJobResponse(j, myApplication);
                 }).collect(Collectors.toList());
     }
 
@@ -203,7 +200,7 @@ public class JobService {
         return appRepository.findById(id).orElseThrow(() -> new RuntimeException("Application not found: " + id));
     }
 
-    private JobResponse toJobResponse(Job j, String myStatus) {
+    private JobResponse toJobResponse(Job j, JobApplication myApplication) {
         long count = appRepository.countByJob(j);
         return JobResponse.builder()
                 .id(j.getId()).title(j.getTitle()).companyName(j.getCompanyName())
@@ -213,8 +210,29 @@ public class JobService {
                 .applicationDeadline(j.getApplicationDeadline()).totalPositions(j.getTotalPositions())
                 .numberOfRounds(j.getNumberOfRounds())
                 .status(getEffectiveJobStatus(j).name()).createdAt(j.getCreatedAt())
-                .applicantCount(count).alreadyApplied(myStatus != null).myApplicationStatus(myStatus)
+                .applicantCount(count)
+                .alreadyApplied(myApplication != null)
+                .myApplicationStatus(myApplication != null ? myApplication.getStatus().name() : null)
+                .myCurrentRoundDisplayStatus(buildCurrentRoundDisplayStatus(myApplication))
                 .build();
+    }
+
+    private String buildCurrentRoundDisplayStatus(JobApplication application) {
+        if (application == null
+                || application.getStatus() == JobApplication.AppStatus.SELECTED
+                || application.getStatus() == JobApplication.AppStatus.REJECTED) {
+            return null;
+        }
+
+        return roundRepository.findByApplicationOrderByRoundNumberAsc(application).stream()
+                .reduce((first, second) -> second)
+                .map(round -> {
+                    String roundName = round.getRoundType() != null && !round.getRoundType().isBlank()
+                            ? round.getRoundType()
+                            : "Round " + round.getRoundNumber();
+                    return roundName + " " + getRoundDisplayState(round);
+                })
+                .orElse(null);
     }
 
     private boolean isBatchEligible(Job job, User user) {
@@ -303,19 +321,60 @@ public class JobService {
     public InterviewRoundResponse scheduleRound(Long appId, InterviewRoundRequest req) {
         JobApplication app = appRepository.findById(appId)
                 .orElseThrow(() -> new RuntimeException("Application not found"));
+        List<InterviewRound> existingRounds = roundRepository.findByApplicationOrderByRoundNumberAsc(app);
+        int configuredRounds = app.getJob().getNumberOfRounds() != null ? app.getJob().getNumberOfRounds() : 0;
 
         if (app.getStatus() == JobApplication.AppStatus.SELECTED || app.getStatus() == JobApplication.AppStatus.REJECTED) {
             throw new RuntimeException("This application is already closed.");
         }
-        if (req.getRoundNumber() == null || req.getRoundNumber() < 1 || req.getRoundNumber() > app.getJob().getNumberOfRounds()) {
+        if (req.getRoundNumber() == null || req.getRoundNumber() < 1) {
             throw new RuntimeException("Please choose a valid round number.");
         }
-        if (roundRepository.findByApplicationAndRoundNumber(app, req.getRoundNumber()).isPresent()) {
-            throw new RuntimeException("This round has already been scheduled.");
+        if (configuredRounds > 0 && req.getRoundNumber() > configuredRounds) {
+            throw new RuntimeException("Only " + configuredRounds + " round(s) are configured for this job.");
         }
 
         validateRoundScheduleRequest(req);
         LocalDate scheduledDate = LocalDate.parse(req.getScheduledDate().trim());
+        Optional<InterviewRound> existingRound = roundRepository.findByApplicationAndRoundNumber(app, req.getRoundNumber());
+
+        if (existingRound.isPresent()) {
+            InterviewRound round = existingRound.get();
+            if (!Boolean.TRUE.equals(req.getRescheduleExisting())) {
+                throw new RuntimeException("You already scheduled this round. Click OK to reschedule it, or Cancel to keep the current schedule.");
+            }
+            if (round.getStatus() == InterviewRound.RoundStatus.COMPLETED) {
+                throw new RuntimeException("This round is already completed. Please schedule the next round instead.");
+            }
+
+            round.setRoundType(req.getRoundType().trim());
+            round.setScheduledDate(scheduledDate);
+            round.setScheduledTime(req.getScheduledTime().trim());
+            round.setInterviewMode(req.getInterviewMode().trim());
+            round.setLocation(req.getLocation().trim());
+            round.setDescription(req.getDescription().trim());
+            round.setStatus(InterviewRound.RoundStatus.SCHEDULED);
+            round.setResult("PENDING");
+            round.setScore(null);
+            round.setNotes(null);
+            round.setFeedback(null);
+
+            InterviewRound saved = roundRepository.save(round);
+            app.setCurrentRound(req.getRoundNumber());
+            app.setStatus(getScheduledStatusForRoundType(req.getRoundType()));
+            appRepository.save(app);
+            return toRoundResponse(saved);
+        }
+
+        int expectedRoundNumber = existingRounds.size() + 1;
+        if (req.getRoundNumber() != expectedRoundNumber) {
+            throw new RuntimeException("Please schedule round " + expectedRoundNumber + " next.");
+        }
+        boolean hasPendingRound = existingRounds.stream()
+                .anyMatch(round -> round.getStatus() == InterviewRound.RoundStatus.SCHEDULED);
+        if (hasPendingRound) {
+            throw new RuntimeException("Complete the currently scheduled round before adding another round.");
+        }
 
         InterviewRound round = InterviewRound.builder()
                 .application(app).roundNumber(req.getRoundNumber())
@@ -343,8 +402,13 @@ public class JobService {
         
         if (!round.getApplication().getId().equals(appId))
             throw new RuntimeException("Round does not belong to this application");
-        
-        round.setResult(req.getResult());
+
+        String normalizedResult = req.getResult() != null ? req.getResult().trim().toUpperCase() : null;
+        if (!"PASS".equals(normalizedResult) && !"FAIL".equals(normalizedResult)) {
+            throw new RuntimeException("Round result must be PASS or FAIL.");
+        }
+
+        round.setResult(normalizedResult);
         round.setScore(req.getScore());
         round.setNotes(req.getNotes());
         round.setFeedback(req.getFeedback());
@@ -352,7 +416,7 @@ public class JobService {
 
         InterviewRound updated = roundRepository.save(round);
 
-        if ("FAIL".equalsIgnoreCase(req.getResult())) {
+        if ("FAIL".equals(normalizedResult)) {
             app.setFinalSelected(false);
             app.setInterviewResult("Rejected");
             app.setStatus(JobApplication.AppStatus.REJECTED);
@@ -368,6 +432,10 @@ public class JobService {
     public ApplicationResponse finalizeRoundProcess(Long appId, FinalDecisionRequest req) {
         JobApplication app = appRepository.findById(appId)
                 .orElseThrow(() -> new RuntimeException("Application not found"));
+
+        if (app.getStatus() == JobApplication.AppStatus.SELECTED || app.getStatus() == JobApplication.AppStatus.REJECTED) {
+            throw new RuntimeException("Final decision has already been recorded for this application.");
+        }
 
         if (req.getFinalSelected() == null) {
             throw new RuntimeException("Please choose a final decision.");
@@ -385,9 +453,14 @@ public class JobService {
         if (!"PASS".equalsIgnoreCase(latestRound.getResult())) {
             throw new RuntimeException("Final decision can be recorded only after the latest round is marked as PASS.");
         }
+        Integer configuredRounds = app.getJob().getNumberOfRounds();
+        if (configuredRounds != null && configuredRounds > 0 && latestRound.getRoundNumber() < configuredRounds) {
+            throw new RuntimeException("Complete all " + configuredRounds + " configured rounds before recording the final decision.");
+        }
 
         app.setFinalSelected(req.getFinalSelected());
-        app.setInterviewNotes(req.getNotes());
+        app.setInterviewNotes(req.getNotes() != null && !req.getNotes().trim().isBlank() ? req.getNotes().trim() : null);
+        app.setCurrentRound(latestRound.getRoundNumber());
 
         if (Boolean.TRUE.equals(req.getFinalSelected())) {
             app.setInterviewResult("Selected");
@@ -456,6 +529,12 @@ public class JobService {
         response.setCurrentRoundNumber(round.getRoundNumber());
         response.setCurrentRoundType(round.getRoundType());
         response.setCurrentRoundStatus(round.getStatus().name());
+
+        if (application.getStatus() == JobApplication.AppStatus.SELECTED
+                || application.getStatus() == JobApplication.AppStatus.REJECTED) {
+            return;
+        }
+
         normalizeAptitudeStatusFromRound(response, round);
 
         String roundName = round.getRoundType() != null && !round.getRoundType().isBlank()

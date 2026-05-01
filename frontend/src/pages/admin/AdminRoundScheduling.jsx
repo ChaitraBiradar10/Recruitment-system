@@ -59,6 +59,16 @@ const formatRoundSchedule = round => {
   });
 };
 
+const toSchedulingState = round => ({
+  roundNumber: round?.roundNumber || 1,
+  roundType: round?.roundType || ROUND_TYPES[0],
+  scheduledDate: round?.scheduledDate || '',
+  scheduledTime: round?.scheduledTime || '',
+  location: round?.location || '',
+  interviewMode: round?.interviewMode || 'Online',
+  description: round?.description || '',
+});
+
 export default function AdminRoundScheduling({ appId, onBack }) {
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState(null);
@@ -76,7 +86,7 @@ export default function AdminRoundScheduling({ appId, onBack }) {
     try {
       const { data: viewData } = await adminService.getRoundScheduling(appId);
       setData(viewData);
-      const nextRound = Math.min(viewData.rounds.length + 1, viewData.numberOfRounds || 1);
+      const nextRound = viewData.rounds.length + 1;
       setScheduling(prev => ({ ...EMPTY_SCHEDULE(nextRound), roundType: prev.roundType || ROUND_TYPES[0] }));
       setShowSchedulingForm(false);
     } catch (error) {
@@ -98,17 +108,28 @@ export default function AdminRoundScheduling({ appId, onBack }) {
 
   const isClosed = ['SELECTED', 'REJECTED'].includes(data?.jobApplicationStatus);
   const latestRound = data?.rounds?.length ? data.rounds[data.rounds.length - 1] : null;
+  const latestRoundResult = latestRound?.result?.toUpperCase?.() || '';
+  const totalRounds = data?.numberOfRounds || 0;
+  const hasReachedFinalRound = Boolean(latestRound) && latestRound.roundNumber >= totalRounds;
+  const nextRoundNumber = (data?.rounds?.length || 0) + 1;
   const currentScheduledRound = data?.rounds?.filter(round => round.status === 'SCHEDULED').slice(-1)[0] || null;
   const waitingForCurrentRound = currentScheduledRound && !hasRoundTimePassed(currentScheduledRound, now);
   const hasPendingScheduledRound = Boolean(currentScheduledRound);
-  const canScheduleAnotherRound = data && !isClosed && data.rounds.length < data.numberOfRounds && !hasPendingScheduledRound;
+  const isEditingScheduledRound = Boolean(currentScheduledRound) && scheduling.roundNumber === currentScheduledRound?.roundNumber;
+  const canScheduleAnotherRound = data
+    && !isClosed
+    && !hasPendingScheduledRound
+    && nextRoundNumber <= totalRounds
+    && (data.rounds.length === 0 || (latestRound?.status === 'COMPLETED' && latestRoundResult === 'PASS'));
   const canGoForFinalDecision = data
     && !isClosed
     && data.rounds.length > 0
     && latestRound?.status === 'COMPLETED'
-    && latestRound?.result === 'PASS'
+    && latestRoundResult === 'PASS'
+    && hasReachedFinalRound
     && !hasPendingScheduledRound;
-  const canShowSchedulingForm = data && !isClosed && !hasPendingScheduledRound;
+  const canRescheduleCurrentRound = data && !isClosed && Boolean(currentScheduledRound);
+  const canShowSchedulingForm = data && !isClosed && (!hasPendingScheduledRound || isEditingScheduledRound);
   const currentStatusLabel = (() => {
     if (currentScheduledRound) {
       return `${currentScheduledRound.roundType || `Round ${currentScheduledRound.roundNumber}`} Scheduled`;
@@ -121,6 +142,46 @@ export default function AdminRoundScheduling({ appId, onBack }) {
     return 'No Round Scheduled';
   })();
   const currentStatusTime = currentScheduledRound ? formatRoundSchedule(currentScheduledRound) : null;
+
+  const submitRoundSchedule = async rescheduleExisting => {
+    await adminService.scheduleRound(appId, {
+      ...scheduling,
+      location: scheduling.location.trim(),
+      description: scheduling.description.trim(),
+      rescheduleExisting,
+    });
+    toast.success(rescheduleExisting ? `Round ${scheduling.roundNumber} rescheduled.` : `Round ${scheduling.roundNumber} scheduled.`);
+    setScheduling(EMPTY_SCHEDULE(scheduling.roundNumber + 1));
+    setShowSchedulingForm(false);
+    await fetchData();
+  };
+
+  const openNewRoundForm = () => {
+    setScheduling(EMPTY_SCHEDULE(nextRoundNumber));
+    setShowFinalDecision(false);
+    setFinalDecision(EMPTY_FINAL_DECISION);
+    setShowSchedulingForm(true);
+  };
+
+  const openRescheduleForm = () => {
+    if (!currentScheduledRound) return;
+    setScheduling(toSchedulingState(currentScheduledRound));
+    setShowFinalDecision(false);
+    setFinalDecision(EMPTY_FINAL_DECISION);
+    setShowSchedulingForm(true);
+  };
+
+  const openFinalDecisionModal = () => {
+    setShowSchedulingForm(false);
+    setSelectedRound(null);
+    setFinalDecision(EMPTY_FINAL_DECISION);
+    setShowFinalDecision(true);
+  };
+
+  const closeFinalDecisionModal = () => {
+    setShowFinalDecision(false);
+    setFinalDecision(EMPTY_FINAL_DECISION);
+  };
 
   const handleScheduleRound = async event => {
     event.preventDefault();
@@ -145,18 +206,23 @@ export default function AdminRoundScheduling({ appId, onBack }) {
 
     setSaving(true);
     try {
-      await adminService.scheduleRound(appId, {
-        ...scheduling,
-        location: scheduling.location.trim(),
-        description: scheduling.description.trim(),
-      });
-      toast.success(`Round ${scheduling.roundNumber} scheduled.`);
-      setScheduling(EMPTY_SCHEDULE(Math.min(scheduling.roundNumber + 1, data.numberOfRounds || scheduling.roundNumber + 1)));
-      setShowSchedulingForm(false);
-      fetchData();
+      await submitRoundSchedule(false);
     } catch (error) {
       console.error(error);
-      toast.error(error.response?.data?.message || 'Failed to schedule round.');
+      const message = error.response?.data?.message || 'Failed to schedule round.';
+      if (message.toLowerCase().includes('already scheduled')) {
+        const shouldReschedule = window.confirm(message);
+        if (shouldReschedule) {
+          try {
+            await submitRoundSchedule(true);
+          } catch (retryError) {
+            console.error(retryError);
+            toast.error(retryError.response?.data?.message || 'Failed to reschedule round.');
+          }
+        }
+      } else {
+        toast.error(message);
+      }
     } finally {
       setSaving(false);
     }
@@ -167,18 +233,18 @@ export default function AdminRoundScheduling({ appId, onBack }) {
     if (!selectedRound) return;
 
     setSaving(true);
-    try {
-      await adminService.recordRoundResult(appId, selectedRound.id, {
-        ...result,
-        score: result.score === '' ? null : parseInt(result.score, 10),
-      });
-      toast.success('Round result recorded.');
-      setSelectedRound(null);
-      setResult(EMPTY_RESULT);
-      fetchData();
-    } catch (error) {
-      console.error(error);
-      toast.error(error.response?.data?.message || 'Failed to record result.');
+      try {
+        await adminService.recordRoundResult(appId, selectedRound.id, {
+          ...result,
+          score: result.score === '' ? null : parseInt(result.score, 10),
+        });
+        toast.success('Round result recorded.');
+        setSelectedRound(null);
+        setResult(EMPTY_RESULT);
+        await fetchData();
+      } catch (error) {
+        console.error(error);
+        toast.error(error.response?.data?.message || 'Failed to record result.');
     } finally {
       setSaving(false);
     }
@@ -190,12 +256,11 @@ export default function AdminRoundScheduling({ appId, onBack }) {
     try {
       await adminService.finalDecision(appId, {
         finalSelected: finalDecision.finalSelected === 'true',
-        notes: finalDecision.notes,
+        notes: finalDecision.notes.trim(),
       });
       toast.success('Final decision recorded.');
-      setShowFinalDecision(false);
-      setFinalDecision(EMPTY_FINAL_DECISION);
-      fetchData();
+      closeFinalDecisionModal();
+      onBack();
     } catch (error) {
       console.error(error);
       toast.error(error.response?.data?.message || 'Failed to record final decision.');
@@ -354,23 +419,25 @@ export default function AdminRoundScheduling({ appId, onBack }) {
           {canScheduleAnotherRound && (
             <button
               className="btn btn-primary"
-              onClick={() => {
-                setScheduling(EMPTY_SCHEDULE(data.rounds.length + 1));
-                setShowSchedulingForm(true);
-              }}
+              onClick={openNewRoundForm}
             >
               {data.rounds.length === 0 ? 'Schedule Round 1' : 'Schedule Next Round'}
             </button>
           )}
+          {canRescheduleCurrentRound && (
+            <button className="btn btn-outline" onClick={openRescheduleForm}>
+              Reschedule Current Round
+            </button>
+          )}
           {canGoForFinalDecision && (
-            <button className="btn btn-gold" onClick={() => setShowFinalDecision(true)}>
+            <button className="btn btn-gold" onClick={openFinalDecisionModal}>
               Go For Final Decision
             </button>
           )}
         </div>
       )}
 
-      {canScheduleAnotherRound && canShowSchedulingForm && showSchedulingForm ? (
+      {canShowSchedulingForm && showSchedulingForm ? (
         <div
           style={{
             padding: 16,
@@ -380,12 +447,14 @@ export default function AdminRoundScheduling({ appId, onBack }) {
             marginBottom: 24,
           }}
         >
-          <h4 style={{ margin: '0 0 16px 0', color: 'var(--text)' }}>Schedule Round {Math.min(data.rounds.length + 1, data.numberOfRounds)}</h4>
+          <h4 style={{ margin: '0 0 16px 0', color: 'var(--text)' }}>
+            {isEditingScheduledRound ? `Reschedule Round ${scheduling.roundNumber}` : `Schedule Round ${scheduling.roundNumber}`}
+          </h4>
           <form onSubmit={handleScheduleRound}>
             <div className="form-row" style={{ marginBottom: 12 }}>
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label>Round</label>
-                <select value={scheduling.roundType} onChange={event => setScheduling(prev => ({ ...prev, roundNumber: data.rounds.length + 1, roundType: event.target.value }))}>
+                <select value={scheduling.roundType} onChange={event => setScheduling(prev => ({ ...prev, roundType: event.target.value }))}>
                   {ROUND_TYPES.map(type => (
                     <option key={type} value={type}>{type}</option>
                   ))}
@@ -393,12 +462,11 @@ export default function AdminRoundScheduling({ appId, onBack }) {
               </div>
               <div className="form-group" style={{ marginBottom: 0 }}>
                 <label>Mode</label>
-                <select value={scheduling.interviewMode} onChange={event => setScheduling(prev => ({ ...prev, interviewMode: event.target.value }))}>
-                  <option>Online</option>
-                  <option>In-person</option>
-                  <option>Hybrid</option>
-                </select>
-              </div>
+                 <select value={scheduling.interviewMode} onChange={event => setScheduling(prev => ({ ...prev, interviewMode: event.target.value }))}>
+                   <option>Online</option>
+                   <option>In-person</option>
+                 </select>
+               </div>
             </div>
 
             <div className="form-row" style={{ marginBottom: 12 }}>
@@ -423,9 +491,14 @@ export default function AdminRoundScheduling({ appId, onBack }) {
               <textarea rows={3} required placeholder="Tell the student what this round is about." value={scheduling.description} onChange={event => setScheduling(prev => ({ ...prev, description: event.target.value }))} />
             </div>
 
-            <button type="submit" className="btn btn-primary" disabled={saving}>
-              {saving ? 'Scheduling...' : 'Schedule Round'}
-            </button>
+            <div className="btn-row">
+              <button type="button" className="btn btn-outline" onClick={() => setShowSchedulingForm(false)} disabled={saving}>
+                Cancel
+              </button>
+              <button type="submit" className="btn btn-primary" disabled={saving}>
+                {saving ? (isEditingScheduledRound ? 'Rescheduling...' : 'Scheduling...') : (isEditingScheduledRound ? 'Save Reschedule' : 'Schedule Round')}
+              </button>
+            </div>
           </form>
         </div>
       ) : !isClosed && !showSchedulingForm && data.rounds.length === 0 ? (
@@ -436,11 +509,19 @@ export default function AdminRoundScheduling({ appId, onBack }) {
         <div className="alert alert-info">
           Final decision stays locked until the scheduled round time has passed and its result is recorded.
         </div>
-      ) : !isClosed && latestRound?.status === 'COMPLETED' && latestRound?.result === 'PASS' ? (
+      ) : !isClosed && latestRound?.status === 'COMPLETED' && latestRoundResult === 'PASS' && canGoForFinalDecision ? (
         <div className="alert alert-success">
-          The latest round has passed. You can now record the final decision or schedule the next round.
+          The final round has passed. You can now record the final decision.
         </div>
-      ) : !isClosed && latestRound?.status === 'COMPLETED' && latestRound?.result === 'FAIL' ? (
+      ) : !isClosed && latestRound?.status === 'COMPLETED' && latestRoundResult === 'PASS' && canScheduleAnotherRound ? (
+        <div className="alert alert-success">
+          The latest round has passed. You can now schedule the next round.
+        </div>
+      ) : !isClosed && latestRound?.status === 'COMPLETED' && latestRoundResult === 'PASS' ? (
+        <div className="alert alert-info">
+          All configured rounds are completed. Final decision will unlock only after the last required round passes.
+        </div>
+      ) : !isClosed && latestRound?.status === 'COMPLETED' && latestRoundResult === 'FAIL' ? (
         <div className="alert alert-danger">
           This application was rejected after the latest round result.
         </div>
@@ -486,7 +567,7 @@ export default function AdminRoundScheduling({ appId, onBack }) {
       )}
 
       {showFinalDecision && (
-        <div className="modal-overlay" onClick={() => setShowFinalDecision(false)}>
+        <div className="modal-overlay" onClick={closeFinalDecisionModal}>
           <div className="modal" onClick={event => event.stopPropagation()}>
             <h3 className="modal-title">Final Decision</h3>
             <form onSubmit={handleFinalDecision}>
@@ -502,7 +583,7 @@ export default function AdminRoundScheduling({ appId, onBack }) {
                 <textarea rows={3} placeholder="Final remarks or summary..." value={finalDecision.notes} onChange={event => setFinalDecision(prev => ({ ...prev, notes: event.target.value }))} />
               </div>
               <div className="btn-row">
-                <button type="button" className="btn btn-outline" onClick={() => setShowFinalDecision(false)}>Cancel</button>
+                <button type="button" className="btn btn-outline" onClick={closeFinalDecisionModal}>Cancel</button>
                 <button type="submit" className="btn btn-gold" disabled={saving}>
                   {saving ? 'Saving...' : 'Save Final Decision'}
                 </button>

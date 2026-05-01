@@ -186,6 +186,7 @@ public class DTOs {
         private long applicantCount;
         private Boolean alreadyApplied;
         private String myApplicationStatus;
+        private String myCurrentRoundDisplayStatus;
     }
 
     // ── Application ───────────────────────────────────────────
@@ -266,6 +267,7 @@ public class DTOs {
         private String interviewMode;  // Online, In-person, Hybrid
         private String location;
         private String description;
+        private Boolean rescheduleExisting;
     }
 
     @Data @Builder @NoArgsConstructor @AllArgsConstructor
