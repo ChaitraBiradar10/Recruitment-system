@@ -60,6 +60,22 @@ const validateRegisterField = (field, form) => {
   const phoneRegex = /^[6-9]\d{9}$/;
   const cgpaRegex = /^(10(\.0{1,2})?|[0-9](\.\d{1,2})?)$/;
   const linkedinRegex = /^https?:\/\/(www\.)?linkedin\.com\/.*$/i;
+  const skillRegex = /^[A-Za-z0-9 .+#/&-]+$/;
+  const hasLetterRegex = /[A-Za-z]/;
+  const getEmailPrefix = email => trimmedValue(email).toLowerCase().split('@')[0].slice(0, 7);
+  const getRollPrefix = rollNumber => trimmedValue(rollNumber).toLowerCase().slice(0, 7);
+  const emailRollPrefixError = () => {
+    const email = trimmedValue(form.email);
+    const rollNumber = trimmedValue(form.rollNumber);
+    if (!email || !rollNumber || !emailRegex.test(email) || !rollRegex.test(rollNumber)) return '';
+    if (email.split('@')[0].length < 7 || rollNumber.length < 7) {
+      return 'Email ID and roll number must have at least 7 characters to verify.';
+    }
+    if (getEmailPrefix(email) !== getRollPrefix(rollNumber)) {
+      return 'First 7 characters of email ID and roll number must be same.';
+    }
+    return '';
+  };
 
   switch (field) {
     case 'firstName':
@@ -73,6 +89,7 @@ const validateRegisterField = (field, form) => {
     case 'email':
       if (!trimmedValue(form.email)) return 'College email is required.';
       if (!emailRegex.test(trimmedValue(form.email))) return 'Use your @students.git.edu email address.';
+      if (emailRollPrefixError()) return emailRollPrefixError();
       return '';
     case 'password':
       if (!form.password) return 'Password is required.';
@@ -85,6 +102,7 @@ const validateRegisterField = (field, form) => {
     case 'rollNumber':
       if (!trimmedValue(form.rollNumber)) return 'Roll number is required.';
       if (!rollRegex.test(trimmedValue(form.rollNumber))) return 'Roll number must be alphanumeric.';
+      if (emailRollPrefixError()) return emailRollPrefixError();
       return '';
     case 'department':
       if (!trimmedValue(form.department)) return 'Department is required.';
@@ -104,8 +122,8 @@ const validateRegisterField = (field, form) => {
     case 'dateOfBirth': {
       if (!trimmedValue(form.dateOfBirth)) return 'Date of birth is required.';
       const dob = new Date(form.dateOfBirth);
-      if (Number.isNaN(dob.getTime())) return 'Please enter a valid date of birth.';
-      if (dob >= new Date('2010-01-01')) return 'Date of birth must be before 2010-01-01.';
+      if (Number.isNaN(dob.getTime())) return 'Invalid DOB.';
+      if (dob >= new Date('2010-01-01')) return 'Invalid DOB.';
       return '';
     }
     case 'cgpa':
@@ -116,6 +134,8 @@ const validateRegisterField = (field, form) => {
       if (!trimmedValue(form.skills)) return 'Skills are required.';
       const skills = form.skills.split(',').map(skill => skill.trim()).filter(Boolean);
       if (skills.length === 0) return 'Please enter at least one skill.';
+      if (skills.some(skill => !skillRegex.test(skill))) return 'Skills must contain characters or alphanumeric values only.';
+      if (skills.some(skill => !hasLetterRegex.test(skill))) return 'Skills cannot be numbers only.';
       return '';
     }
     case 'linkedinUrl':
@@ -125,6 +145,7 @@ const validateRegisterField = (field, form) => {
     case 'coverNote':
       if (!trimmedValue(form.coverNote)) return 'Cover note is required.';
       if (trimmedValue(form.coverNote).length < 20) return 'Cover note must be at least 20 characters.';
+      if (!hasLetterRegex.test(trimmedValue(form.coverNote))) return 'Cover note cannot be numbers only.';
       return '';
     case 'resume':
       if (!form.resume) return 'Resume is required.';
@@ -169,6 +190,10 @@ export default function LoginPage() {
   const [lf, setLf] = useState({ email: '', password: '' });
   const [rf, setRf] = useState(INITIAL_REGISTER_FORM);
   const [registerErrors, setRegisterErrors] = useState({});
+  const [registrationOtp, setRegistrationOtp] = useState('');
+  const [otpSent, setOtpSent] = useState(false);
+  const [otpVerified, setOtpVerified] = useState(false);
+  const [otpLoading, setOtpLoading] = useState(false);
   const [ff, setFf] = useState(INITIAL_FORGOT_FORM);
   const { login } = useAuth();
   const navigate = useNavigate();
@@ -190,12 +215,22 @@ export default function LoginPage() {
       ? `${value || ''}`.replace(/\D/g, '').slice(0, 10)
       : value;
 
+    if (['email', 'rollNumber'].includes(field)) {
+      setRegistrationOtp('');
+      setOtpSent(false);
+      setOtpVerified(false);
+    }
+
     setRf(prev => {
       const next = { ...prev, [field]: nextValue };
 
       setRegisterErrors(prevErrors => {
         const nextErrors = { ...prevErrors };
-        const fieldsToValidate = field === 'password' ? ['password', 'confirmPassword'] : [field];
+        const fieldsToValidate = field === 'password'
+          ? ['password', 'confirmPassword']
+          : ['email', 'rollNumber'].includes(field)
+            ? ['email', 'rollNumber']
+            : [field];
 
         fieldsToValidate.forEach(name => {
           const message = validateRegisterField(name, next);
@@ -208,6 +243,60 @@ export default function LoginPage() {
 
       return next;
     });
+  };
+
+  const handleSendRegistrationOtp = async () => {
+    const emailError = validateRegisterField('email', rf);
+    const rollError = validateRegisterField('rollNumber', rf);
+    if (emailError || rollError) {
+      setRegisterErrors(prev => ({
+        ...prev,
+        ...(emailError ? { email: emailError } : {}),
+        ...(rollError ? { rollNumber: rollError } : {}),
+      }));
+      toast.error(emailError || rollError);
+      return;
+    }
+
+    setOtpLoading(true);
+    try {
+      const { data } = await authService.sendRegistrationOtp({
+        email: rf.email.trim().toLowerCase(),
+        rollNumber: rf.rollNumber.trim().toUpperCase(),
+      });
+      setOtpSent(true);
+      setOtpVerified(false);
+      setRegistrationOtp('');
+      toast.success(data.message);
+    } catch (error) {
+      const message = error.response?.data?.message || error.response?.data?.error || 'Failed to send OTP.';
+      setRegisterErrors(prev => ({ ...prev, email: message }));
+      toast.error(message);
+    } finally {
+      setOtpLoading(false);
+    }
+  };
+
+  const handleVerifyRegistrationOtp = async () => {
+    if (!registrationOtp.trim()) {
+      toast.error('Enter the OTP sent to your email.');
+      return;
+    }
+
+    setOtpLoading(true);
+    try {
+      const { data } = await authService.verifyRegistrationOtp({
+        email: rf.email.trim().toLowerCase(),
+        otp: registrationOtp.trim(),
+      });
+      setOtpVerified(true);
+      toast.success(data.message);
+    } catch (error) {
+      setOtpVerified(false);
+      toast.error(error.response?.data?.message || 'Invalid OTP.');
+    } finally {
+      setOtpLoading(false);
+    }
   };
 
   const handleLogin = async event => {
@@ -247,6 +336,10 @@ export default function LoginPage() {
       }
       return;
     }
+    if (!otpVerified) {
+      toast.error('Please verify your email OTP before registration.');
+      return;
+    }
 
     setLoading(true);
 
@@ -276,9 +369,12 @@ export default function LoginPage() {
       toast.success(data.message);
       setRf(INITIAL_REGISTER_FORM);
       setRegisterErrors({});
+      setRegistrationOtp('');
+      setOtpSent(false);
+      setOtpVerified(false);
       navigate('/pending');
     } catch (error) {
-      toast.error(error.response?.data?.message || 'Registration failed.');
+      toast.error(error.response?.data?.message || error.response?.data?.error || error.message || 'Registration failed.');
     } finally {
       setLoading(false);
     }
@@ -464,6 +560,35 @@ export default function LoginPage() {
                   </div>
                 </div>
 
+                <div className="form-row">
+                  <div className="form-group">
+                    <label>Email OTP *</label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={6}
+                      placeholder={otpSent ? 'Enter 6-digit OTP' : 'Send OTP first'}
+                      value={registrationOtp}
+                      disabled={!otpSent || otpVerified}
+                      onChange={event => setRegistrationOtp(event.target.value.replace(/\D/g, '').slice(0, 6))}
+                    />
+                    <div className="form-hint">
+                      {otpVerified ? 'Email verified.' : 'OTP is sent to your college email and is valid for 5 minutes.'}
+                    </div>
+                  </div>
+                  <div className="form-group" style={{ justifyContent: 'flex-end' }}>
+                    <label>&nbsp;</label>
+                    <div style={{ display: 'flex', gap: 8 }}>
+                      <button type="button" className="btn btn-outline btn-sm" onClick={handleSendRegistrationOtp} disabled={otpLoading || otpVerified}>
+                        {otpLoading && !otpSent ? 'Sending...' : otpSent ? 'Resend OTP' : 'Send OTP'}
+                      </button>
+                      <button type="button" className="btn btn-success btn-sm" onClick={handleVerifyRegistrationOtp} disabled={otpLoading || !otpSent || otpVerified}>
+                        {otpVerified ? 'Verified' : 'Verify OTP'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
                 <div className="form-group">
                   <label>Department *</label>
                   <select className={registerErrors.department ? 'input-error' : ''} required value={rf.department} onChange={event => updateRegisterField('department', event.target.value)}>
@@ -544,8 +669,8 @@ export default function LoginPage() {
                   )}
                 </div>
 
-                <button type="submit" className="btn btn-gold btn-full btn-lg" disabled={loading}>
-                  {loading ? 'Submitting...' : 'Submit for Approval'}
+                <button type="submit" className="btn btn-gold btn-full btn-lg" disabled={loading || !otpVerified}>
+                  {loading ? 'Submitting...' : 'Send for Approval'}
                 </button>
 
                 <p className="auth-inline-note">

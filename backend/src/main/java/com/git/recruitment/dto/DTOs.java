@@ -46,6 +46,7 @@ public class DTOs {
         @Pattern(regexp = "^(10(\\.0{1,2})?|[0-9](\\.\\d{1,2})?)$", message = "CGPA must be between 0 and 10 with up to 2 decimal places.")
         private String cgpa;
         @NotBlank(message = "Skills are required.")
+        @Pattern(regexp = "^[A-Za-z0-9 .+#/&-]+(\\s*,\\s*[A-Za-z0-9 .+#/&-]+)*$", message = "Skills must contain characters or alphanumeric values only.")
         private String skills;
         @NotBlank(message = "LinkedIn URL is required.")
         @Pattern(regexp = "^(?i)https?://(www\\.)?linkedin\\.com/.*$", message = "Enter a valid LinkedIn profile URL.")
@@ -65,6 +66,18 @@ public class DTOs {
     public static class ForgotPasswordRequest {
         @NotBlank @Email private String email;
         @NotBlank @Size(min = 8) private String newPassword;
+    }
+
+    @Data @NoArgsConstructor @AllArgsConstructor
+    public static class SendRegistrationOtpRequest {
+        @NotBlank @Email private String email;
+        @NotBlank private String rollNumber;
+    }
+
+    @Data @NoArgsConstructor @AllArgsConstructor
+    public static class VerifyRegistrationOtpRequest {
+        @NotBlank @Email private String email;
+        @NotBlank @Size(min = 6, max = 6) private String otp;
     }
 
     @Data @Builder @NoArgsConstructor @AllArgsConstructor
@@ -125,11 +138,11 @@ public class DTOs {
     public static class JobRequest {
         @NotBlank(message = "Job title is required.")
         @Size(min = 2, max = 100, message = "Job title must be between 2 and 100 characters.")
-        @Pattern(regexp = "^[A-Za-z ]+$", message = "Job title must contain letters and spaces only.")
+        @Pattern(regexp = "^(?=.*[A-Za-z])[A-Za-z .]+$", message = "Job title can contain letters, spaces, and dot only.")
         private String title;
         @NotBlank(message = "Company name is required.")
         @Size(min = 2, max = 100, message = "Company name must be between 2 and 100 characters.")
-        @Pattern(regexp = "^[A-Za-z ]+$", message = "Company name must contain letters and spaces only.")
+        @Pattern(regexp = "^(?=.*[A-Za-z])[A-Za-z .]+$", message = "Company name can contain letters, spaces, and dot only.")
         private String companyName;
         @NotBlank(message = "Description is required.")
         @Size(min = 10, max = 2000, message = "Description must be between 10 and 2000 characters.")
@@ -143,19 +156,19 @@ public class DTOs {
         @Pattern(regexp = "^(Full-time|Internship|Contract|Part-time)$", message = "Please select a valid job type.")
         private String jobType;
         @NotBlank(message = "Salary/package is required.")
-        @Pattern(regexp = "^\\d+(\\.\\d{1,2})?$", message = "Salary/package must be a valid positive number.")
+        @Pattern(regexp = "^[1-9]\\d?$", message = "Salary/package must be numbers only and maximum 2 digits.")
         private String salaryPackage;
         @NotBlank(message = "Eligible departments are required.")
         @Pattern(regexp = "^(CSE|ECE|ME|CE|EE|IT|AI&DS|EEE|CHE|AERO|AUTO|BT|MCA)(\\s*,\\s*(CSE|ECE|ME|CE|EE|IT|AI&DS|EEE|CHE|AERO|AUTO|BT|MCA))*$", message = "Invalid depts.")
         private String eligibleBranches;
         @NotBlank(message = "Eligible batches are required.")
-        @Pattern(regexp = "^20\\d{2}(\\s*,\\s*20\\d{2})*$", message = "Eligible batches must be valid 4-digit years.")
+        @Pattern(regexp = "^(2025|2026|2027)(\\s*,\\s*(2025|2026|2027))*$", message = "Eligible batches must be between 2025 and 2027.")
         private String eligibleBatches;
         @NotBlank(message = "Required skills are required.")
-        @Pattern(regexp = "^[A-Za-z ]+(\\s*,\\s*[A-Za-z ]+)*$", message = "Skills must contain letters only and be comma separated.")
+        @Pattern(regexp = "^[A-Za-z0-9 .+#/&()\\-]+(\\s*,\\s*[A-Za-z0-9 .+#/&()\\-]+)*$", message = "Required skills must contain characters or alphanumeric values only.")
         private String skills;
         @NotNull(message = "Minimum CGPA is required.")
-        @DecimalMin(value = "0.0", message = "Minimum CGPA must be at least 0.")
+        @DecimalMin(value = "4.5", message = "Minimum CGPA must be at least 4.5.")
         @DecimalMax(value = "10.0", message = "Minimum CGPA must not exceed 10.")
         private Double minimumCgpa;
         @NotNull(message = "Application deadline is required.")

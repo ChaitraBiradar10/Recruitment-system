@@ -20,13 +20,14 @@ const DEPT_ABBR = {
   'Master of Computer Applications': 'MCA'
 };
 const VALID_DEPARTMENTS = ['CSE', 'ECE', 'ME', 'CE', 'EE', 'IT', 'AI&DS', 'EEE', 'CHE', 'AERO', 'AUTO', 'BT', 'MCA'];
-const TITLE_REGEX = /^[A-Za-z ]+$/;
-const COMPANY_REGEX = /^[A-Za-z ]+$/;
+const TITLE_REGEX = /^(?=.*[A-Za-z])[A-Za-z .]+$/;
+const COMPANY_REGEX = /^(?=.*[A-Za-z])[A-Za-z .]+$/;
 const DESCRIPTION_REGEX = /^[A-Za-z0-9 .,;:()'"\/&+-]+$/;
 const LOCATION_REGEX = /^[A-Za-z ,.-]+$/;
-const SALARY_REGEX = /^\d+(\.\d{1,2})?$/;
-const SKILLS_REGEX = /^[A-Za-z ]+(,\s*[A-Za-z ]+)*$/;
-const BATCH_REGEX = /^20\d{2}(\s*,\s*20\d{2})*$/;
+const SALARY_REGEX = /^[1-9]\d?$/;
+const SKILLS_REGEX = /^[A-Za-z0-9 .+#/&()-]+(,\s*[A-Za-z0-9 .+#/&()-]+)*$/;
+const HAS_LETTER_REGEX = /[A-Za-z]/;
+const BATCH_REGEX = /^(2025|2026|2027)(\s*,\s*(2025|2026|2027))*$/;
 
 const getEffectiveStatus = job => {
   if (job?.status === 'CLOSED') return 'CLOSED';
@@ -38,7 +39,7 @@ const getEffectiveStatus = job => {
   const deadline = new Date(job.applicationDeadline);
   deadline.setHours(0, 0, 0, 0);
 
-  if (deadline <= today) return 'CLOSED';
+  if (deadline < today) return 'CLOSED';
   return job?.status || 'DRAFT';
 };
 
@@ -73,7 +74,9 @@ export default function AdminJobs() {
   const [saving, setSaving] = useState(false);
   const navigate = useNavigate();
   const set = k => e => {
-    const value = e.target.value;
+    const value = k === 'salaryPackage'
+      ? e.target.value.replace(/\D/g, '').slice(0, 2)
+      : e.target.value;
     setForm(prev => {
       const nextForm = { ...prev, [k]: value };
       setFieldErrors(prevErrors => ({ ...prevErrors, [k]: validateField(k, nextForm) }));
@@ -105,12 +108,12 @@ export default function AdminJobs() {
       case 'title':
         if (!title) return 'Job title is required.';
         if (title.length < 2 || title.length > 100) return 'Job title must be between 2 and 100 characters.';
-        if (!TITLE_REGEX.test(title)) return 'Job title must contain letters and spaces only.';
+        if (!TITLE_REGEX.test(title)) return 'Job title can contain letters, spaces, and dot only.';
         return '';
       case 'companyName':
         if (!companyName) return 'Company name is required.';
         if (companyName.length < 2 || companyName.length > 100) return 'Company name must be between 2 and 100 characters.';
-        if (!COMPANY_REGEX.test(companyName)) return 'Company name must contain letters and spaces only.';
+        if (!COMPANY_REGEX.test(companyName)) return 'Company name can contain letters, spaces, and dot only.';
         return '';
       case 'description':
         if (!description) return 'Job description is required.';
@@ -124,7 +127,7 @@ export default function AdminJobs() {
         return '';
       case 'salaryPackage':
         if (!salaryPackage) return 'Salary/package is required.';
-        if (!SALARY_REGEX.test(salaryPackage)) return 'Enter a valid salary.';
+        if (!SALARY_REGEX.test(salaryPackage)) return 'Salary/package must be numbers only and maximum 2 digits.';
         return '';
       case 'totalPositions':
         if (!values.totalPositions) return 'Total positions is required.';
@@ -132,7 +135,7 @@ export default function AdminJobs() {
         return '';
       case 'minimumCgpa':
         if (values.minimumCgpa === '' || Number.isNaN(cgpa)) return 'Minimum CGPA is required.';
-        if (cgpa < 0 || cgpa > 10) return 'Minimum CGPA must be between 0 and 10.';
+        if (cgpa < 4.5 || cgpa > 10) return 'Minimum CGPA must be between 4.5 and 10.';
         return '';
       case 'applicationDeadline':
         if (!values.applicationDeadline) return 'Application deadline is required.';
@@ -149,11 +152,12 @@ export default function AdminJobs() {
         return '';
       case 'eligibleBatches':
         if (!eligibleBatches) return 'Eligible batches are required.';
-        if (!BATCH_REGEX.test(eligibleBatches)) return 'Enter valid batch years like 2024, 2025.';
+        if (!BATCH_REGEX.test(eligibleBatches)) return 'Eligible batches must be between 2025 and 2027.';
         return '';
       case 'skills':
         if (!skills) return 'Required skills are required.';
-        if (!SKILLS_REGEX.test(skills)) return 'Skills must contain letters only and be comma separated.';
+        if (!SKILLS_REGEX.test(skills)) return 'Required skills must contain characters or alphanumeric values only.';
+        if (skills.split(',').map(skill => skill.trim()).filter(Boolean).some(skill => !HAS_LETTER_REGEX.test(skill))) return 'Required skills cannot be numbers only.';
         return '';
       default:
         return '';
@@ -323,7 +327,7 @@ export default function AdminJobs() {
               <div className="form-row">
                 <div className="form-group">
                   <label>Salary / Package</label>
-                  <input type="text" required value={form.salaryPackage} onChange={set('salaryPackage')} className={fieldErrors.salaryPackage ? 'input-error' : ''} />
+                  <input type="text" inputMode="numeric" maxLength={2} required value={form.salaryPackage} onChange={set('salaryPackage')} className={fieldErrors.salaryPackage ? 'input-error' : ''} />
                   {fieldErrors.salaryPackage && <div className="field-error">{fieldErrors.salaryPackage}</div>}
                 </div>
                 <div className="form-group">
@@ -335,7 +339,7 @@ export default function AdminJobs() {
               <div className="form-row">
                 <div className="form-group">
                   <label>Minimum CGPA</label>
-                  <input type="number" min="0" max="10" step="0.1" required value={form.minimumCgpa} onChange={set('minimumCgpa')} className={fieldErrors.minimumCgpa ? 'input-error' : ''} />
+                  <input type="number" min="4.5" max="10" step="0.1" required value={form.minimumCgpa} onChange={set('minimumCgpa')} className={fieldErrors.minimumCgpa ? 'input-error' : ''} />
                   {fieldErrors.minimumCgpa && <div className="field-error">{fieldErrors.minimumCgpa}</div>}
                 </div>
                 <div className="form-group">
@@ -350,7 +354,7 @@ export default function AdminJobs() {
                 {fieldErrors.eligibleBranches && <div className="field-error">{fieldErrors.eligibleBranches}</div>}
               </div>
               <div className="form-group">
-                <label>Eligible Batches (comma separated years)</label>
+                <label>Eligible Batches (2025 to 2027, comma separated)</label>
                 <input type="text" required value={form.eligibleBatches} onChange={set('eligibleBatches')} className={fieldErrors.eligibleBatches ? 'input-error' : ''} />
                 {fieldErrors.eligibleBatches && <div className="field-error">{fieldErrors.eligibleBatches}</div>}
               </div>
@@ -363,7 +367,7 @@ export default function AdminJobs() {
                 <select required value={form.status} onChange={set('status')}>
                   <option value="ACTIVE">Active</option>
                   <option value="DRAFT">Draft</option>
-                  {editJob && form.status === 'CLOSED' && <option value="CLOSED">Closed</option>}
+                  <option value="CLOSED">Closed</option>
                 </select>
               </div>
               <div className="btn-row">

@@ -26,6 +26,7 @@ public class AuthService {
     private final UserDetailsService userDetailsService;
     private final EmailService emailService;
     private final StudentService studentService;
+    private final OtpService otpService;
 
     @Value("${app.college.email-domain}") private String allowedDomain;
 
@@ -35,19 +36,27 @@ public class AuthService {
 
         if (!req.getEmail().endsWith(allowedDomain))
             return ApiResponse.error("Only " + allowedDomain + " email addresses are allowed.");
+        if (!emailAndRollNumberPrefixesMatch(req.getEmail(), req.getRollNumber()))
+            return ApiResponse.error("First 7 characters of email ID and roll number must be same.");
+        if (!otpService.isRegistrationEmailVerified(req.getEmail()))
+            return ApiResponse.error("Please verify your email OTP before registration.");
         if (userRepository.existsByEmail(req.getEmail()))
             return ApiResponse.error("An account with this email already exists.");
         if (userRepository.existsByRollNumber(req.getRollNumber()))
             return ApiResponse.error("This roll number is already registered.");
         if (req.getSkills().split(",").length == 0 || Arrays.stream(req.getSkills().split(",")).map(String::trim).noneMatch(s -> !s.isEmpty()))
             return ApiResponse.error("Please enter at least one skill.");
+        if (Arrays.stream(req.getSkills().split(",")).map(String::trim).anyMatch(s -> !s.matches(".*[A-Za-z].*")))
+            return ApiResponse.error("Skills cannot be numbers only.");
+        if (!req.getCoverNote().matches(".*[A-Za-z].*"))
+            return ApiResponse.error("Cover note cannot be numbers only.");
 
         try {
             LocalDate dob = LocalDate.parse(req.getDateOfBirth());
             if (!dob.isBefore(LocalDate.of(2010, 1, 1)))
-                return ApiResponse.error("Date of birth must be before 2010-01-01.");
+                return ApiResponse.error("Invalid DOB.");
         } catch (DateTimeParseException e) {
-            return ApiResponse.error("Date of birth must be a valid date.");
+            return ApiResponse.error("Invalid DOB.");
         }
 
         try {
@@ -76,7 +85,13 @@ public class AuthService {
             throw new RuntimeException("Resume upload failed: " + e.getMessage(), e);
         }
 
-        emailService.sendRegistrationReceived(user);
+        try {
+            emailService.sendRegistrationReceived(user);
+        } catch (Exception e) {
+            log.warn("Registration saved, but confirmation email could not be queued. userId={}, email={}, error={}",
+                    user.getId(), user.getEmail(), e.getMessage());
+        }
+        otpService.consumeRegistrationOtp(user.getEmail());
         return ApiResponse.ok("Registration submitted. Awaiting admin approval.");
     }
 
@@ -144,5 +159,14 @@ public class AuthService {
         req.setSkills(req.getSkills().trim());
         req.setLinkedinUrl(req.getLinkedinUrl().trim());
         req.setCoverNote(req.getCoverNote().trim());
+    }
+
+    private boolean emailAndRollNumberPrefixesMatch(String email, String rollNumber) {
+        String emailId = email != null ? email.split("@")[0].trim().toLowerCase() : "";
+        String normalizedRollNumber = rollNumber != null ? rollNumber.trim().toLowerCase() : "";
+        if (emailId.length() < 7 || normalizedRollNumber.length() < 7) {
+            return false;
+        }
+        return emailId.substring(0, 7).equals(normalizedRollNumber.substring(0, 7));
     }
 }

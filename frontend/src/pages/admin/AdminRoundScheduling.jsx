@@ -25,7 +25,6 @@ const EMPTY_RESULT = {
   result: 'PASS',
   score: '',
   notes: '',
-  feedback: '',
 };
 
 const EMPTY_FINAL_DECISION = {
@@ -33,7 +32,9 @@ const EMPTY_FINAL_DECISION = {
   notes: '',
 };
 
-const ROUND_LOCATION_REGEX = /^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9 .,#:/()-]+$/;
+const ROUND_LOCATION_REGEX = /^[A-Za-z0-9 .,#:/()-]+$/;
+const ROUND_DESCRIPTION_REGEX = /^[A-Za-z0-9 .,;:()'"\/&+-]+$/;
+const HAS_LETTER_REGEX = /[A-Za-z]/;
 
 const getRoundDateTime = round => {
   if (!round?.scheduledDate || !round?.scheduledTime) return null;
@@ -109,8 +110,6 @@ export default function AdminRoundScheduling({ appId, onBack }) {
   const isClosed = ['SELECTED', 'REJECTED'].includes(data?.jobApplicationStatus);
   const latestRound = data?.rounds?.length ? data.rounds[data.rounds.length - 1] : null;
   const latestRoundResult = latestRound?.result?.toUpperCase?.() || '';
-  const totalRounds = data?.numberOfRounds || 0;
-  const hasReachedFinalRound = Boolean(latestRound) && latestRound.roundNumber >= totalRounds;
   const nextRoundNumber = (data?.rounds?.length || 0) + 1;
   const currentScheduledRound = data?.rounds?.filter(round => round.status === 'SCHEDULED').slice(-1)[0] || null;
   const waitingForCurrentRound = currentScheduledRound && !hasRoundTimePassed(currentScheduledRound, now);
@@ -119,14 +118,12 @@ export default function AdminRoundScheduling({ appId, onBack }) {
   const canScheduleAnotherRound = data
     && !isClosed
     && !hasPendingScheduledRound
-    && nextRoundNumber <= totalRounds
     && (data.rounds.length === 0 || (latestRound?.status === 'COMPLETED' && latestRoundResult === 'PASS'));
   const canGoForFinalDecision = data
     && !isClosed
     && data.rounds.length > 0
     && latestRound?.status === 'COMPLETED'
     && latestRoundResult === 'PASS'
-    && hasReachedFinalRound
     && !hasPendingScheduledRound;
   const canRescheduleCurrentRound = data && !isClosed && Boolean(currentScheduledRound);
   const canShowSchedulingForm = data && !isClosed && (!hasPendingScheduledRound || isEditingScheduledRound);
@@ -200,7 +197,19 @@ export default function AdminRoundScheduling({ appId, onBack }) {
       return;
     }
     if (!ROUND_LOCATION_REGEX.test(scheduling.location.trim())) {
-      toast.error('Place / Location must include both letters and numbers.');
+      toast.error('Place / Location can contain letters, numbers, spaces, and basic punctuation.');
+      return;
+    }
+    if (!HAS_LETTER_REGEX.test(scheduling.location.trim())) {
+      toast.error('Place / Location cannot contain only numbers.');
+      return;
+    }
+    if (!ROUND_DESCRIPTION_REGEX.test(scheduling.description.trim())) {
+      toast.error('Round description can contain letters, numbers, spaces, and basic punctuation.');
+      return;
+    }
+    if (!HAS_LETTER_REGEX.test(scheduling.description.trim())) {
+      toast.error('Round description cannot contain only numbers.');
       return;
     }
 
@@ -396,7 +405,6 @@ export default function AdminRoundScheduling({ appId, onBack }) {
                   <div><strong>Result:</strong> {round.result}</div>
                   <div><strong>Score:</strong> {round.score ?? '--'}</div>
                   {round.notes && <div style={{ marginTop: 4 }}><strong>Notes:</strong> {round.notes}</div>}
-                  {round.feedback && <div style={{ marginTop: 4, color: 'var(--gray-600)' }}><strong>Feedback:</strong> {round.feedback}</div>}
                 </div>
               )}
               {round.status === 'SCHEDULED' && hasRoundTimePassed(round, now) && (
@@ -483,7 +491,7 @@ export default function AdminRoundScheduling({ appId, onBack }) {
             <div className="form-group">
               <label>Place / Location</label>
               <input type="text" required placeholder="Meeting room, lab, board room, or online link note" value={scheduling.location} onChange={event => setScheduling(prev => ({ ...prev, location: event.target.value }))} />
-              <div className="form-hint">Use letters and numbers together, for example Room 101 or Lab 2.</div>
+              <div className="form-hint">Examples: Online, Google Meet, Seminar Hall, Room 101, or Lab 2.</div>
             </div>
 
             <div className="form-group">
@@ -509,17 +517,17 @@ export default function AdminRoundScheduling({ appId, onBack }) {
         <div className="alert alert-info">
           Final decision stays locked until the scheduled round time has passed and its result is recorded.
         </div>
+      ) : !isClosed && latestRound?.status === 'COMPLETED' && latestRoundResult === 'PASS' && canGoForFinalDecision && canScheduleAnotherRound ? (
+        <div className="alert alert-success">
+          The latest round has passed. You can now schedule the next round or record the final decision.
+        </div>
       ) : !isClosed && latestRound?.status === 'COMPLETED' && latestRoundResult === 'PASS' && canGoForFinalDecision ? (
         <div className="alert alert-success">
-          The final round has passed. You can now record the final decision.
+          You can now record the final decision.
         </div>
       ) : !isClosed && latestRound?.status === 'COMPLETED' && latestRoundResult === 'PASS' && canScheduleAnotherRound ? (
         <div className="alert alert-success">
           The latest round has passed. You can now schedule the next round.
-        </div>
-      ) : !isClosed && latestRound?.status === 'COMPLETED' && latestRoundResult === 'PASS' ? (
-        <div className="alert alert-info">
-          All configured rounds are completed. Final decision will unlock only after the last required round passes.
         </div>
       ) : !isClosed && latestRound?.status === 'COMPLETED' && latestRoundResult === 'FAIL' ? (
         <div className="alert alert-danger">
@@ -550,10 +558,6 @@ export default function AdminRoundScheduling({ appId, onBack }) {
               <div className="form-group">
                 <label>Notes</label>
                 <textarea rows={3} placeholder="Internal notes..." value={result.notes} onChange={event => setResult(prev => ({ ...prev, notes: event.target.value }))} />
-              </div>
-              <div className="form-group">
-                <label>Feedback</label>
-                <textarea rows={3} placeholder="Candidate feedback..." value={result.feedback} onChange={event => setResult(prev => ({ ...prev, feedback: event.target.value }))} />
               </div>
               <div className="btn-row">
                 <button type="button" className="btn btn-outline" onClick={() => setSelectedRound(null)}>Cancel</button>

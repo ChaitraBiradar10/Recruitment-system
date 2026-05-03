@@ -18,9 +18,9 @@ api.interceptors.response.use(r => r, err => {
 
 export const authService = {
   register: d => api.post('/auth/register', d),
-  registerWithFile: formData => api.post('/auth/register', formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
-  }),
+  registerWithFile: formData => api.post('/auth/register', formData),
+  sendRegistrationOtp: d => api.post('/auth/registration/send-otp', d),
+  verifyRegistrationOtp: d => api.post('/auth/registration/verify-otp', d),
   login:    d => api.post('/auth/login', d),
   forgotPassword: d => api.post('/auth/forgot-password', d),
 };

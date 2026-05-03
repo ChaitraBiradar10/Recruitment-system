@@ -58,6 +58,8 @@ const getStatusConfig = applicant => {
   return STATUS_CFG[applicant?.status] || { label: applicant?.status, cls: 'badge-pending' };
 };
 
+const isFinalApplicationStatus = status => ['SELECTED', 'REJECTED'].includes(`${status || ''}`.toUpperCase());
+
 export default function AdminJobApplicants() {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -211,13 +213,13 @@ export default function AdminJobApplicants() {
 
   const renderApplicantActions = app => (
     <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
-      {!['SELECTED', 'REJECTED'].includes(app.status) && (
+      {!isFinalApplicationStatus(app.status) && (
         <button className="btn btn-sm btn-success" onClick={() => openRoundScheduling(app)}>
           Round Scheduling
         </button>
       )}
-      {!['SELECTED', 'REJECTED'].includes(app.status) && <button className="btn btn-sm btn-danger" onClick={() => doRejectApplicant(app)}>Reject</button>}
-      {['SELECTED', 'REJECTED'].includes(app.status) && <span style={{ fontSize: 12, color: 'var(--gray-400)' }}>Completed</span>}
+      {!isFinalApplicationStatus(app.status) && <button className="btn btn-sm btn-danger" onClick={() => doRejectApplicant(app)}>Reject</button>}
+      {isFinalApplicationStatus(app.status) && <span style={{ fontSize: 12, color: 'var(--gray-400)' }}>Completed</span>}
     </div>
   );
 
@@ -338,10 +340,10 @@ export default function AdminJobApplicants() {
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 16 }}>
-                {!['SELECTED', 'REJECTED'].includes(selected.status) && (
+                {!isFinalApplicationStatus(selected.status) && (
                   <button className="btn btn-success btn-full" onClick={() => openRoundScheduling(selected)}>Round Scheduling</button>
                 )}
-                {!['SELECTED', 'REJECTED'].includes(selected.status) && (
+                {!isFinalApplicationStatus(selected.status) && (
                   <button className="btn btn-danger btn-full" onClick={() => doRejectApplicant(selected)}>Reject Applicant</button>
                 )}
                 <button className="btn btn-outline btn-full" onClick={() => openStudentModal(selected)}>View Full Profile</button>

@@ -42,6 +42,18 @@ public class StudentService {
         if (req.getDepartment()  != null) u.setDepartment(req.getDepartment());
         if (req.getBatchYear()   != null) u.setBatchYear(req.getBatchYear());
         if (req.getCgpa()        != null) u.setCgpa(req.getCgpa());
+        if (req.getRollNumber()  != null) {
+            String rollNumber = req.getRollNumber().trim().toUpperCase();
+            if (rollNumber.isBlank()) {
+                throw new RuntimeException("Roll number is required.");
+            }
+            userRepository.findByRollNumber(rollNumber)
+                    .filter(existing -> !existing.getId().equals(u.getId()))
+                    .ifPresent(existing -> {
+                        throw new RuntimeException("This roll number already exists.");
+                    });
+            u.setRollNumber(rollNumber);
+        }
         if (req.getSkills()      != null) u.setSkills(req.getSkills());
         if (req.getLinkedinUrl() != null) u.setLinkedinUrl(req.getLinkedinUrl());
         if (req.getCoverNote()   != null) u.setCoverNote(req.getCoverNote());

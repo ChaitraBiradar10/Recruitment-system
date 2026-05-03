@@ -21,6 +21,7 @@ import java.util.List;
 @RequiredArgsConstructor
 class AuthController {
     private final AuthService authService;
+    private final OtpService otpService;
 
     @PostMapping("/register")
     public ResponseEntity<ApiResponse> register(
@@ -42,6 +43,18 @@ class AuthController {
     @PostMapping("/forgot-password")
     public ResponseEntity<ApiResponse> forgotPassword(@Valid @RequestBody ForgotPasswordRequest req) {
         ApiResponse response = authService.forgotPassword(req);
+        return response.isSuccess() ? ResponseEntity.ok(response) : ResponseEntity.badRequest().body(response);
+    }
+
+    @PostMapping("/registration/send-otp")
+    public ResponseEntity<ApiResponse> sendRegistrationOtp(@Valid @RequestBody SendRegistrationOtpRequest req) {
+        ApiResponse response = otpService.sendRegistrationOtp(req.getEmail(), req.getRollNumber());
+        return response.isSuccess() ? ResponseEntity.ok(response) : ResponseEntity.badRequest().body(response);
+    }
+
+    @PostMapping("/registration/verify-otp")
+    public ResponseEntity<ApiResponse> verifyRegistrationOtp(@Valid @RequestBody VerifyRegistrationOtpRequest req) {
+        ApiResponse response = otpService.verifyRegistrationOtp(req.getEmail(), req.getOtp());
         return response.isSuccess() ? ResponseEntity.ok(response) : ResponseEntity.badRequest().body(response);
     }
 

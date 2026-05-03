@@ -21,5 +21,7 @@ public interface JobApplicationRepository extends JpaRepository<JobApplication, 
     List<JobApplication> findByUserOrderByAppliedAtDesc(User user);
     @EntityGraph(attributePaths = {"job"})
     List<JobApplication> findByUserAndFinalSelectedTrueOrderByUpdatedAtDesc(User user);
+    @EntityGraph(attributePaths = {"job"})
+    List<JobApplication> findByUserAndStatusOrderByUpdatedAtDesc(User user, JobApplication.AppStatus status);
 
 }

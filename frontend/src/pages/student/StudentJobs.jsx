@@ -70,6 +70,11 @@ const splitCsv = value =>
     .map(part => part.trim())
     .filter(Boolean);
 
+const toNumber = value => {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+};
+
 export default function StudentJobs() {
   const { user } = useAuth();
   const [jobs, setJobs] = useState([]);
@@ -93,10 +98,16 @@ export default function StudentJobs() {
     
     // If profile not loaded yet, assume they might be eligible (show job)
     // Error will show when they try to apply
-    if (!user.department || !user.skills || !user.batchYear) return true;
+    if (!user.department || !user.skills || !user.batchYear || !user.cgpa) return true;
 
     const eligibleBatches = splitCsv(job.eligibleBatches);
     if (eligibleBatches.length > 0 && !eligibleBatches.includes(String(user.batchYear).trim())) {
+      return false;
+    }
+
+    const studentCgpa = toNumber(user.cgpa);
+    const requiredCgpa = toNumber(job.minimumCgpa);
+    if (requiredCgpa !== null && (studentCgpa === null || studentCgpa < requiredCgpa)) {
       return false;
     }
 
@@ -119,12 +130,17 @@ export default function StudentJobs() {
   const getErrorMessage = (job) => {
     if (!user) return 'Please login to apply';
         // If profile not loaded, show generic message
-    if (!user.department || !user.skills || !user.batchYear) {
+    if (!user.department || !user.skills || !user.batchYear || !user.cgpa) {
       return 'Please complete your profile to check eligibility.';
     }
     const eligibleBatches = splitCsv(job.eligibleBatches);
     if (eligibleBatches.length > 0 && !eligibleBatches.includes(String(user.batchYear).trim())) {
       return `This position is only open to batch ${job.eligibleBatches}.`;
+    }
+    const studentCgpa = toNumber(user.cgpa);
+    const requiredCgpa = toNumber(job.minimumCgpa);
+    if (requiredCgpa !== null && (studentCgpa === null || studentCgpa < requiredCgpa)) {
+      return `Your CGPA ${user.cgpa || '--'} is below the minimum required CGPA ${job.minimumCgpa}.`;
     }
         const studentDeptAbbr = getDeptAbbr(user.department);
     if (!studentDeptAbbr) return 'Department not recognized';
@@ -150,6 +166,13 @@ export default function StudentJobs() {
     const eligibleBatches = splitCsv(job.eligibleBatches);
     if (eligibleBatches.length > 0 && !eligibleBatches.includes(studentBatchYear)) {
       toast.error(`This position is only open to batch ${job.eligibleBatches}.`);
+      return;
+    }
+
+    const studentCgpa = toNumber(user?.cgpa);
+    const requiredCgpa = toNumber(job.minimumCgpa);
+    if (requiredCgpa !== null && (studentCgpa === null || studentCgpa < requiredCgpa)) {
+      toast.error(`Your CGPA ${user?.cgpa || '--'} is below the minimum required CGPA ${job.minimumCgpa}.`);
       return;
     }
     
@@ -217,7 +240,10 @@ export default function StudentJobs() {
           const isExpanded = expanded === job.id;
           const appliedLabel = job.myCurrentRoundDisplayStatus || APP_STATUS_LABELS[job.myApplicationStatus] || 'Applied';
           const deadlineDate = job.applicationDeadline ? new Date(job.applicationDeadline) : null;
-          const isDeadlinePassed = deadlineDate && deadlineDate < new Date();
+          const today = new Date();
+          today.setHours(0, 0, 0, 0);
+          if (deadlineDate) deadlineDate.setHours(0, 0, 0, 0);
+          const isDeadlinePassed = deadlineDate && deadlineDate < today;
           const meetsReqs = meetsRequirements(job);
           return (
             <div key={job.id} className="job-card">
@@ -256,7 +282,7 @@ export default function StudentJobs() {
 
               <div className="job-tags">
                 {job.jobType       && <span className="job-tag">💼 {job.jobType}</span>}
-                {job.salaryPackage && <span className="job-tag">💰 {job.salaryPackage}</span>}
+                {job.salaryPackage && <span className="job-tag">💰 {job.salaryPackage} LPA</span>}
                 {job.minimumCgpa   && <span className="job-tag">📊 Min CGPA: {job.minimumCgpa}</span>}
                 {job.totalPositions && <span className="job-tag">🎯 {job.totalPositions} Positions</span>}
                 {job.applicationDeadline && (

@@ -1,10 +1,14 @@
 package com.git.recruitment.service;
 
 import com.git.recruitment.dto.DTOs.*;
+import com.git.recruitment.event.JobCreatedEvent;
+import com.git.recruitment.event.UserActionEvent;
+import com.git.recruitment.event.UserActionType;
 import com.git.recruitment.model.*;
 import com.git.recruitment.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDate;
@@ -18,17 +22,20 @@ import java.util.stream.Collectors;
 
 @Service @RequiredArgsConstructor @Slf4j
 public class JobService {
-    private static final String ROUND_LOCATION_PATTERN = "^(?=.*[A-Za-z])(?=.*\\d)[A-Za-z0-9 .,#:/()\\-]+$";
+    private static final String ROUND_LOCATION_PATTERN = "^[A-Za-z0-9 .,#:/()\\-]+$";
+    private static final String ROUND_DESCRIPTION_PATTERN = "^[A-Za-z0-9 .,;:()'\"/&+\\-]+$";
 
     private final JobRepository jobRepository;
     private final JobApplicationRepository appRepository;
     private final InterviewRoundRepository roundRepository;
     private final UserRepository userRepository;
     private final EmailService emailService;
+    private final ApplicationEventPublisher eventPublisher;
 
     // ── Admin: Create Job ─────────────────────────────────────
     @Transactional
     public JobResponse createJob(JobRequest req) {
+        validateJobRequiredSkills(req.getSkills());
         Job job = Job.builder()
                 .title(req.getTitle()).companyName(req.getCompanyName())
                 .description(req.getDescription()).location(req.getLocation())
@@ -39,12 +46,16 @@ public class JobService {
                 .numberOfRounds(req.getNumberOfRounds() != null ? req.getNumberOfRounds() : 2)
                 .status(req.getStatus() != null ? Job.JobStatus.valueOf(req.getStatus()) : Job.JobStatus.ACTIVE)
                 .build();
-        return toJobResponse(jobRepository.save(job), null);
+        Job saved = jobRepository.save(job);
+        eventPublisher.publishEvent(new JobCreatedEvent(saved));
+        log.info("Published job created event. jobId={}", saved.getId());
+        return toJobResponse(saved, null);
     }
 
     // ── Admin: Update Job ─────────────────────────────────────
     @Transactional
     public JobResponse updateJob(Long id, JobRequest req) {
+        if (req.getSkills() != null) validateJobRequiredSkills(req.getSkills());
         Job job = getJob(id);
         if (req.getTitle()              != null) job.setTitle(req.getTitle());
         if (req.getCompanyName()        != null) job.setCompanyName(req.getCompanyName());
@@ -65,7 +76,15 @@ public class JobService {
 
     // ── Admin: Delete Job ─────────────────────────────────────
     @Transactional
-    public void deleteJob(Long id) { jobRepository.deleteById(id); }
+    public void deleteJob(Long id) {
+        Job job = getJob(id);
+        List<JobApplication> applications = appRepository.findByJob(job);
+
+        applications.forEach(application ->
+                roundRepository.deleteAll(roundRepository.findByApplication(application)));
+        appRepository.deleteAll(applications);
+        jobRepository.delete(job);
+    }
 
     // ── Admin: Get All Jobs ───────────────────────────────────
     public List<JobResponse> getAllJobsAdmin() {
@@ -98,6 +117,8 @@ public class JobService {
             throw new IllegalStateException("This job is no longer accepting applications.");
         if (!isBatchEligible(job, user))
             throw new IllegalStateException("This job is not available for your batch year.");
+        if (!isCgpaEligible(job, user))
+            throw new IllegalStateException("Your CGPA is below the minimum required CGPA for this job.");
 
         JobApplication app = JobApplication.builder()
                 .user(user).job(job).status(JobApplication.AppStatus.APPLIED).build();
@@ -128,7 +149,10 @@ public class JobService {
     public ApplicationResponse updateApplicationStatus(Long appId, String status) {
         JobApplication app = getApp(appId);
         app.setStatus(JobApplication.AppStatus.valueOf(status));
-        return toAppResponse(appRepository.save(app));
+        JobApplication saved = appRepository.save(app);
+        publishApplicationAction(saved, UserActionType.PROFILE_UPDATED,
+                "Your application status for " + jobLabel(saved.getJob()) + " was updated to " + saved.getStatus().name() + ".");
+        return toAppResponse(saved);
     }
 
     // ── Admin: Schedule Aptitude Test ────────────────────────
@@ -136,7 +160,10 @@ public class JobService {
     public ApplicationResponse scheduleAptitude(Long appId) {
         JobApplication app = getApp(appId);
         app.setStatus(JobApplication.AppStatus.APTITUDE_SCHEDULED);
-        return toAppResponse(appRepository.save(app));
+        JobApplication saved = appRepository.save(app);
+        publishApplicationAction(saved, UserActionType.APTITUDE_SCHEDULED,
+                "An aptitude round has been scheduled for your application to " + jobLabel(saved.getJob()) + ".");
+        return toAppResponse(saved);
     }
 
     // ── Admin: Record Aptitude Result ────────────────────────
@@ -148,7 +175,12 @@ public class JobService {
         app.setStatus(req.getCleared()
                 ? JobApplication.AppStatus.APTITUDE_CLEARED
                 : JobApplication.AppStatus.APTITUDE_FAILED);
-        return toAppResponse(appRepository.save(app));
+        JobApplication saved = appRepository.save(app);
+        publishApplicationAction(saved, UserActionType.APTITUDE_RESULT_RECORDED,
+                "Your aptitude result for " + jobLabel(saved.getJob()) + " has been recorded as "
+                        + (Boolean.TRUE.equals(req.getCleared()) ? "cleared" : "not cleared")
+                        + (req.getScore() != null ? " with score " + req.getScore() + "." : "."));
+        return toAppResponse(saved);
     }
 
     // ── Admin: Schedule Interview ─────────────────────────────
@@ -176,6 +208,8 @@ public class JobService {
             emailService.sendFinalSelection(app.getUser(), app.getJob());
         } else {
             app.setStatus(JobApplication.AppStatus.REJECTED);
+            publishApplicationAction(app, UserActionType.FINAL_DECISION_RECORDED,
+                    "The final decision for your application to " + jobLabel(app.getJob()) + " has been recorded as not selected.");
         }
         return toAppResponse(appRepository.save(app));
     }
@@ -190,7 +224,10 @@ public class JobService {
             app.setInterviewNotes("Rejected by admin before proceeding in the selection process.");
         }
         app.setStatus(JobApplication.AppStatus.REJECTED);
-        return toAppResponse(appRepository.save(app));
+        JobApplication saved = appRepository.save(app);
+        publishApplicationAction(saved, UserActionType.APPLICATION_REJECTED,
+                "Your application to " + jobLabel(saved.getJob()) + " has been rejected by the Placement Office.");
+        return toAppResponse(saved);
     }
 
     private Job getJob(Long id) {
@@ -261,7 +298,7 @@ public class JobService {
             return Job.JobStatus.CLOSED;
         }
 
-        if (job.getApplicationDeadline() != null && !job.getApplicationDeadline().isAfter(LocalDate.now())) {
+        if (job.getApplicationDeadline() != null && job.getApplicationDeadline().isBefore(LocalDate.now())) {
             return Job.JobStatus.CLOSED;
         }
 
@@ -310,7 +347,7 @@ public class JobService {
                 .studentName(app.getUser().getFirstName() + " " + app.getUser().getLastName())
                 .studentEmail(app.getUser().getEmail()).rollNumber(app.getUser().getRollNumber())
                 .jobTitle(app.getJob().getTitle()).companyName(app.getJob().getCompanyName())
-                .numberOfRounds(app.getJob().getNumberOfRounds())
+                .numberOfRounds(getConfiguredRoundCount(app.getJob()))
                 .currentRound(app.getCurrentRound() != null ? app.getCurrentRound() : 0)
                 .jobApplicationStatus(app.getStatus().name())
                 .rounds(roundResponses)
@@ -322,16 +359,11 @@ public class JobService {
         JobApplication app = appRepository.findById(appId)
                 .orElseThrow(() -> new RuntimeException("Application not found"));
         List<InterviewRound> existingRounds = roundRepository.findByApplicationOrderByRoundNumberAsc(app);
-        int configuredRounds = app.getJob().getNumberOfRounds() != null ? app.getJob().getNumberOfRounds() : 0;
-
         if (app.getStatus() == JobApplication.AppStatus.SELECTED || app.getStatus() == JobApplication.AppStatus.REJECTED) {
             throw new RuntimeException("This application is already closed.");
         }
         if (req.getRoundNumber() == null || req.getRoundNumber() < 1) {
             throw new RuntimeException("Please choose a valid round number.");
-        }
-        if (configuredRounds > 0 && req.getRoundNumber() > configuredRounds) {
-            throw new RuntimeException("Only " + configuredRounds + " round(s) are configured for this job.");
         }
 
         validateRoundScheduleRequest(req);
@@ -363,6 +395,7 @@ public class JobService {
             app.setCurrentRound(req.getRoundNumber());
             app.setStatus(getScheduledStatusForRoundType(req.getRoundType()));
             appRepository.save(app);
+            publishRoundScheduled(app, saved, true);
             return toRoundResponse(saved);
         }
 
@@ -388,8 +421,36 @@ public class JobService {
         app.setCurrentRound(req.getRoundNumber());
         app.setStatus(getScheduledStatusForRoundType(req.getRoundType()));
         appRepository.save(app);
+        publishRoundScheduled(app, saved, false);
 
         return toRoundResponse(saved);
+    }
+
+    private int getConfiguredRoundCount(Job job) {
+        return job.getNumberOfRounds() != null && job.getNumberOfRounds() > 0
+                ? job.getNumberOfRounds()
+                : 2;
+    }
+
+    private boolean isCgpaEligible(Job job, User user) {
+        if (job.getMinimumCgpa() == null) return true;
+        if (user.getCgpa() == null || user.getCgpa().isBlank()) return false;
+        try {
+            return Double.parseDouble(user.getCgpa().trim()) >= job.getMinimumCgpa();
+        } catch (NumberFormatException ex) {
+            return false;
+        }
+    }
+
+    private void validateJobRequiredSkills(String skills) {
+        if (skills == null || skills.isBlank()) return;
+        boolean hasNumberOnlySkill = Arrays.stream(skills.split(","))
+                .map(String::trim)
+                .filter(skill -> !skill.isBlank())
+                .anyMatch(skill -> !skill.matches(".*[A-Za-z].*"));
+        if (hasNumberOnlySkill) {
+            throw new IllegalArgumentException("Required skills cannot be numbers only.");
+        }
     }
 
     @Transactional
@@ -411,7 +472,7 @@ public class JobService {
         round.setResult(normalizedResult);
         round.setScore(req.getScore());
         round.setNotes(req.getNotes());
-        round.setFeedback(req.getFeedback());
+        round.setFeedback(null);
         round.setStatus(InterviewRound.RoundStatus.COMPLETED);
 
         InterviewRound updated = roundRepository.save(round);
@@ -424,6 +485,10 @@ public class JobService {
             app.setStatus(getCompletedPassStatusForRoundType(round.getRoundType()));
         }
         appRepository.save(app);
+        publishApplicationAction(app, UserActionType.ROUND_RESULT_RECORDED,
+                "Your " + roundLabel(round) + " result for " + jobLabel(app.getJob())
+                        + " has been recorded as " + normalizedResult
+                        + (req.getScore() != null ? " with score " + req.getScore() + "." : "."));
 
         return toRoundResponse(updated);
     }
@@ -453,11 +518,6 @@ public class JobService {
         if (!"PASS".equalsIgnoreCase(latestRound.getResult())) {
             throw new RuntimeException("Final decision can be recorded only after the latest round is marked as PASS.");
         }
-        Integer configuredRounds = app.getJob().getNumberOfRounds();
-        if (configuredRounds != null && configuredRounds > 0 && latestRound.getRoundNumber() < configuredRounds) {
-            throw new RuntimeException("Complete all " + configuredRounds + " configured rounds before recording the final decision.");
-        }
-
         app.setFinalSelected(req.getFinalSelected());
         app.setInterviewNotes(req.getNotes() != null && !req.getNotes().trim().isBlank() ? req.getNotes().trim() : null);
         app.setCurrentRound(latestRound.getRoundNumber());
@@ -469,9 +529,49 @@ public class JobService {
         } else {
             app.setInterviewResult("Rejected");
             app.setStatus(JobApplication.AppStatus.REJECTED);
+            publishApplicationAction(app, UserActionType.FINAL_DECISION_RECORDED,
+                    "The final decision for your application to " + jobLabel(app.getJob()) + " has been recorded as not selected.");
         }
 
         return toAppResponse(appRepository.save(app));
+    }
+
+    private void publishRoundScheduled(JobApplication app, InterviewRound round, boolean rescheduled) {
+        publishApplicationAction(app, UserActionType.ROUND_SCHEDULED,
+                "Your " + roundLabel(round) + " for " + jobLabel(app.getJob())
+                        + " has been " + (rescheduled ? "rescheduled" : "scheduled")
+                        + " on " + valueOrTbd(round.getScheduledDate() != null ? round.getScheduledDate().toString() : null)
+                        + " at " + valueOrTbd(round.getScheduledTime())
+                        + ". Mode: " + valueOrTbd(round.getInterviewMode())
+                        + ". Place: " + valueOrTbd(round.getLocation()) + ".");
+    }
+
+    private void publishApplicationAction(JobApplication app, UserActionType actionType, String message) {
+        User user = app.getUser();
+        user.getEmail();
+        user.getFirstName();
+        eventPublisher.publishEvent(new UserActionEvent(user, actionType, message));
+        log.info("Published application action event. applicationId={}, userId={}, action={}",
+                app.getId(), user.getId(), actionType);
+    }
+
+    private String jobLabel(Job job) {
+        if (job == null) return "the job";
+        String title = job.getTitle() != null && !job.getTitle().isBlank() ? job.getTitle() : "the role";
+        String company = job.getCompanyName() != null && !job.getCompanyName().isBlank() ? job.getCompanyName() : null;
+        return company == null ? title : title + " at " + company;
+    }
+
+    private String roundLabel(InterviewRound round) {
+        if (round == null) return "selection round";
+        String type = round.getRoundType() != null && !round.getRoundType().isBlank()
+                ? round.getRoundType()
+                : "Round " + round.getRoundNumber();
+        return type + " (Round " + round.getRoundNumber() + ")";
+    }
+
+    private String valueOrTbd(String value) {
+        return value != null && !value.isBlank() ? value : "TBD";
     }
 
     private void validateRoundScheduleRequest(InterviewRoundRequest req) {
@@ -489,10 +589,19 @@ public class JobService {
             throw new RuntimeException("Place / Location is required.");
         }
         if (!req.getLocation().trim().matches(ROUND_LOCATION_PATTERN)) {
-            throw new RuntimeException("Place / Location must include both letters and numbers.");
+            throw new RuntimeException("Place / Location can contain letters, numbers, spaces, and basic punctuation.");
+        }
+        if (!containsLetter(req.getLocation())) {
+            throw new RuntimeException("Place / Location cannot contain only numbers.");
         }
         if (req.getDescription() == null || req.getDescription().trim().isBlank()) {
             throw new RuntimeException("Round description is required.");
+        }
+        if (!req.getDescription().trim().matches(ROUND_DESCRIPTION_PATTERN)) {
+            throw new RuntimeException("Round description can contain letters, numbers, spaces, and basic punctuation.");
+        }
+        if (!containsLetter(req.getDescription())) {
+            throw new RuntimeException("Round description cannot contain only numbers.");
         }
 
         try {
@@ -505,6 +614,10 @@ public class JobService {
         } catch (DateTimeParseException ex) {
             throw new RuntimeException("Please enter a valid round date and time.");
         }
+    }
+
+    private boolean containsLetter(String value) {
+        return value != null && value.matches(".*[A-Za-z].*");
     }
 
     private InterviewRoundResponse toRoundResponse(InterviewRound r) {

@@ -6,8 +6,11 @@ import org.springframework.http.*;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.validation.FieldError;
+import org.springframework.web.HttpMediaTypeNotSupportedException;
+import org.springframework.web.bind.MissingServletRequestParameterException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.support.MissingServletRequestPartException;
 import java.util.stream.Collectors;
 
 @RestControllerAdvice
@@ -22,6 +25,15 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(JsonMappingException.class)
     public ResponseEntity<ApiResponse> handleJsonMapping(JsonMappingException ex) {
         return ResponseEntity.badRequest().body(ApiResponse.error("Invalid JSON format: " + ex.getMessage()));
+    }
+
+    @ExceptionHandler({
+            MissingServletRequestPartException.class,
+            MissingServletRequestParameterException.class,
+            HttpMediaTypeNotSupportedException.class
+    })
+    public ResponseEntity<ApiResponse> handleBadRequest(Exception ex) {
+        return ResponseEntity.badRequest().body(ApiResponse.error("Invalid registration request: " + ex.getMessage()));
     }
     
     @ExceptionHandler(BadCredentialsException.class)
@@ -41,4 +53,3 @@ public class GlobalExceptionHandler {
         return ResponseEntity.internalServerError().body(ApiResponse.error("An unexpected error occurred: " + ex.getMessage()));
     }
 }
-

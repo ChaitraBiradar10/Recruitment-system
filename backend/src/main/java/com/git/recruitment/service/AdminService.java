@@ -1,10 +1,13 @@
 package com.git.recruitment.service;
 
 import com.git.recruitment.dto.DTOs.*;
+import com.git.recruitment.event.UserActionEvent;
+import com.git.recruitment.event.UserActionType;
 import com.git.recruitment.model.*;
 import com.git.recruitment.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
@@ -20,7 +23,7 @@ public class AdminService {
     private final ResumeRepository resumeRepository;
     private final JobRepository jobRepository;
     private final JobApplicationRepository appRepository;
-    private final EmailService emailService;
+    private final ApplicationEventPublisher eventPublisher;
     private final StudentService studentService;
 
     public DashboardStats getDashboardStats() {
@@ -37,13 +40,15 @@ public class AdminService {
 
     public List<AdminStudentView> getAllStudents() {
         return userRepository.findByRole(User.Role.STUDENT).stream()
-                .sorted((a, b) -> b.getCreatedAt().compareTo(a.getCreatedAt()))
+                .sorted(Comparator.comparing(User::getCreatedAt,
+                        Comparator.nullsLast(Comparator.reverseOrder())))
                 .map(this::buildAdminView).collect(Collectors.toList());
     }
 
     public List<AdminStudentView> getSelectedStudents() {
         return userRepository.findByRole(User.Role.STUDENT).stream()
-                .sorted((a, b) -> b.getCreatedAt().compareTo(a.getCreatedAt()))
+                .sorted(Comparator.comparing(User::getCreatedAt,
+                        Comparator.nullsLast(Comparator.reverseOrder())))
                 .map(user -> {
                     try {
                         return buildAdminView(user);
@@ -69,7 +74,8 @@ public class AdminService {
         u.setRegistrationStatus(User.RegistrationStatus.APPROVED);
         u.setApprovedAt(LocalDateTime.now());
         userRepository.save(u);
-        emailService.sendRegistrationApproved(u);
+        publishUserAction(u, UserActionType.REGISTRATION_APPROVED,
+                "Your registration has been approved by the Placement Office.");
         return buildAdminView(u);
     }
 
@@ -78,7 +84,8 @@ public class AdminService {
         User u = getUser(id);
         u.setRegistrationStatus(User.RegistrationStatus.REJECTED);
         userRepository.save(u);
-        emailService.sendRegistrationRejected(u);
+        publishUserAction(u, UserActionType.REGISTRATION_REJECTED,
+                "Your registration has been rejected by the Placement Office.");
         return buildAdminView(u);
     }
 
@@ -87,7 +94,8 @@ public class AdminService {
         User u = getUser(id);
         u.setApplicationStatus(User.ApplicationStatus.SHORTLISTED);
         userRepository.save(u);
-        emailService.sendCVShortlisted(u);
+        publishUserAction(u, UserActionType.CV_SHORTLISTED,
+                "Your CV has been shortlisted and shared for the placement process.");
         return buildAdminView(u);
     }
 
@@ -96,7 +104,8 @@ public class AdminService {
         User u = getUser(id);
         u.setApplicationStatus(User.ApplicationStatus.REJECTED);
         userRepository.save(u);
-        emailService.sendCVRejected(u);
+        publishUserAction(u, UserActionType.CV_REJECTED,
+                "Your CV was reviewed but not shortlisted for the current cycle.");
         return buildAdminView(u);
     }
 
@@ -105,6 +114,8 @@ public class AdminService {
         User u = getUser(id);
         u.setApplicationStatus(User.ApplicationStatus.UNDER_REVIEW);
         userRepository.save(u);
+        publishUserAction(u, UserActionType.PROFILE_UNDER_REVIEW,
+                "Your profile is currently under review by the Placement Office.");
         return buildAdminView(u);
     }
 
@@ -114,10 +125,15 @@ public class AdminService {
         return userRepository.findById(id).orElseThrow(() -> new RuntimeException("Student not found: " + id));
     }
 
+    private void publishUserAction(User user, UserActionType actionType, String message) {
+        eventPublisher.publishEvent(new UserActionEvent(user, actionType, message));
+        log.info("Published user action event. userId={}, action={}", user.getId(), actionType);
+    }
+
     private AdminStudentView buildAdminView(User u) {
         Optional<Resume> r = resumeRepository.findByUser(u);
         List<JobApplication> selectedApplications = appRepository
-                .findByUserAndFinalSelectedTrueOrderByUpdatedAtDesc(u);
+                .findByUserAndStatusOrderByUpdatedAtDesc(u, JobApplication.AppStatus.SELECTED);
 
         String selectedCompanies = selectedApplications.stream()
                 .map(JobApplication::getJob)
